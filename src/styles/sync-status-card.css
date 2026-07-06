@@ -1,0 +1,15 @@
+/* SyncStatusCard.svelte */
+
+.sync-status-card {
+    display: grid;
+    gap: 14px;
+}
+
+.sync-status-text {
+    margin: 0;
+    color: var(--color-text-muted);
+}
+
+.detail-button {
+    justify-self: start;
+}

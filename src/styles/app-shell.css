@@ -1,0 +1,58 @@
+/* AppShell.svelte */
+
+.app-shell {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-rows: 72px minmax(0, 1fr);
+    grid-template-areas:
+      "sidebar topbar"
+      "sidebar main";
+    height: 100vh;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  .sidebar-column {
+    grid-area: sidebar;
+    min-width: 0;
+  }
+
+  .topbar-row {
+    grid-area: topbar;
+    min-width: 0;
+  }
+
+  .main-column {
+    grid-area: main;
+    min-width: 0;
+    overflow: auto;
+    padding: var(--space-5) var(--space-5) var(--space-6);
+  }
+
+  @media (max-width: 1280px) {
+    .app-shell {
+      grid-template-columns: 248px minmax(0, 1fr);
+      grid-template-rows: 72px minmax(0, 1fr);
+      grid-template-areas:
+        "sidebar topbar"
+        "sidebar main";
+    }
+  }
+
+  @media (max-width: 980px) {
+    .app-shell {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto auto auto;
+      grid-template-areas:
+        "topbar"
+        "sidebar"
+        "main";
+      overflow: auto;
+    }
+
+    .sidebar-column,
+    .topbar-row,
+    .main-column {
+      padding: var(--space-4);
+    }
+  }

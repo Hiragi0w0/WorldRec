@@ -1,0 +1,8 @@
+/* RightPanel.svelte */
+
+.right-panel {
+    display: grid;
+    gap: var(--space-5);
+    align-content: start;
+    height: 100%;
+  }

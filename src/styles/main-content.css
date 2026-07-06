@@ -1,0 +1,13 @@
+/* MainContent.svelte */
+
+.main-content {
+    display: grid;
+    gap: var(--space-5);
+    align-content: start;
+    min-width: 0;
+  }
+
+  .main-content > * {
+    min-width: 0;
+    max-width: 100%;
+  }

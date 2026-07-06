@@ -1,0 +1,43 @@
+{
+  "name": "worldrec",
+  "private": true,
+  "version": "0.1.0",
+  "description": "VRChat world visit history recorder and explorer",
+  "license": "GPL-3.0-only",
+  "author": "Hiragi0w0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hiragi0w0/WorldRec.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Hiragi0w0/WorldRec/issues"
+  },
+  "homepage": "https://github.com/Hiragi0w0/WorldRec#readme",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "tauri": "tauri",
+    "build:sidecar": "node scripts/build-sidecar.mjs"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.0",
+    "@tauri-apps/cli": "^2.11.2",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.12.3",
+    "phosphor-svelte": "^3.1.0",
+    "svelte": "^5.55.5",
+    "svelte-check": "^4.4.8",
+    "tailwindcss": "^4.3.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "bits-ui": "^2.18.1",
+    "lucide-svelte": "^1.0.1"
+  }
+}
