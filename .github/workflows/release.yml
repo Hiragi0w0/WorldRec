@@ -90,6 +90,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Tauri の build script が externalBin を検証する前に、
+      # 必須の src-tauri/binaries/worldrec-ai-<triple>.exe を生成する。
+      - name: Build sidecar binary
+        run: npm run build:sidecar
+
       # tauri build が beforeBuildCommand (build:sidecar → build) を実行し、
       # 生成したインストーラーを Release に添付する。
       - name: Build and draft release
