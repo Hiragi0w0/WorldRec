@@ -53,6 +53,11 @@ jobs:
           go vet ./...
           go test ./...
 
+      # externalBin (binaries/worldrec-ai-<triple>.exe) を生成。
+      # cargo test でも Tauri の build script が tauri.conf.json を検証するため必要。
+      - name: Build sidecar binary
+        run: npm run build:sidecar
+
       - name: Cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
