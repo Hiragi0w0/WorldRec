@@ -1,4 +1,4 @@
-module github.com/Hiragi0w0/WorldRec-dev/sidecar
+module github.com/Hiragi0w0/WorldRec/sidecar
 
 go 1.24.7
 

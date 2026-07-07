@@ -5,7 +5,7 @@ use std::time::Duration;
 use tauri::State;
 
 const VRCHAT_API_BASE: &str = "https://api.vrchat.cloud/api/1";
-const USER_AGENT: &str = "WorldRec/0.1.0 (https://github.com/Hiragi0w0/WorldRec-dev)";
+const USER_AGENT: &str = "WorldRec/0.1.0 (https://github.com/Hiragi0w0/WorldRec)";
 const REQUEST_TIMEOUT_SECONDS: u64 = 10;
 const KEYRING_SERVICE: &str = "WorldRec";
 const KEYRING_ENTRY: &str = "vrchat_auth_cookie";

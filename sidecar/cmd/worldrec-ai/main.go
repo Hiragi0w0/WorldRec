@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Hiragi0w0/WorldRec-dev/sidecar/internal/workflow"
+	"github.com/Hiragi0w0/WorldRec/sidecar/internal/workflow"
 )
 
 const (
