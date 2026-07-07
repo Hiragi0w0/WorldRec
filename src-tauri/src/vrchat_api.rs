@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 #[cfg_attr(test, allow(dead_code))]
 const VRCHAT_API_BASE_URL: &str = "https://api.vrchat.cloud/api/1/worlds";
 #[cfg_attr(test, allow(dead_code))]
-const USER_AGENT: &str = "WorldRec/0.1.0 (https://github.com/Hiragi0w0/WorldRec-dev)";
+const USER_AGENT: &str = "WorldRec/0.1.0 (https://github.com/Hiragi0w0/WorldRec)";
 #[cfg_attr(test, allow(dead_code))]
 const REQUEST_TIMEOUT_SECONDS: u64 = 8;
 const DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS: u64 = 120;
