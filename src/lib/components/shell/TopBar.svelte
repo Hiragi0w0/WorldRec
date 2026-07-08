@@ -14,7 +14,9 @@
     }
 
     function openBugReport() {
-        void openUrl(BUG_REPORT_URL);
+        openUrl(BUG_REPORT_URL).catch((error) => {
+            console.error("不具合報告フォームを開けませんでした:", error);
+        });
     }
 </script>
 
