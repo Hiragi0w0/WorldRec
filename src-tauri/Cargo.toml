@@ -24,6 +24,7 @@ log = "0.4"
 tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
 chrono = "0.4.45"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

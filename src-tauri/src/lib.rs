@@ -27,6 +27,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![autostart::BACKGROUND_START_ARG]),
         ))
+        .plugin(tauri_plugin_opener::init())
         .manage(log_watcher::state::LogWatcherState::new())
         .manage(vrchat_api::VrchatApiState::new())
         .manage(vrchat_auth::VrchatAuthState::new())

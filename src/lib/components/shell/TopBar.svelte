@@ -1,13 +1,22 @@
 <script lang="ts">
-    import { Bell, RotateCw, Search } from "lucide-svelte";
+    import { Bug, RotateCw, Search } from "lucide-svelte";
+    import { openUrl } from "@tauri-apps/plugin-opener";
 
     export let searchQuery: string;
     export let isSyncing: boolean;
     export let onSearchChange: (query: string) => void;
     export let onQuickSync: () => void;
 
+    const BUG_REPORT_URL = "https://forms.gle/2fUNoNT3f9cd2dEr7";
+
     function handleSearchInput(event: Event) {
         onSearchChange((event.currentTarget as HTMLInputElement).value);
+    }
+
+    function openBugReport() {
+        openUrl(BUG_REPORT_URL).catch((error) => {
+            console.error("不具合報告フォームを開けませんでした:", error);
+        });
     }
 </script>
 
@@ -42,11 +51,12 @@
         >
             <RotateCw class="w-4 h-4" />
         </button>
-        <div class="relative">
-            <button class="p-2.5 text-zinc-600 bg-white border border-[#E1DEC9] rounded-xl hover:bg-[#FAF9F5] transition-colors shadow-sm" title="通知">
-                <Bell class="w-4 h-4" />
-            </button>
-            <span class="absolute top-1 right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-[#FAF9F5]"></span>
-        </div>
+        <button
+            onclick={openBugReport}
+            class="p-2.5 text-zinc-600 bg-white border border-[#E1DEC9] rounded-xl hover:bg-[#FAF9F5] transition-colors shadow-sm"
+            title="不具合報告"
+        >
+            <Bug class="w-4 h-4" />
+        </button>
     </div>
 </header>
