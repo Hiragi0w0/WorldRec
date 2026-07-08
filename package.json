@@ -1,7 +1,7 @@
 {
   "name": "worldrec",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "VRChat world visit history recorder and explorer",
   "license": "GPL-3.0-only",
   "author": "Hiragi0w0",

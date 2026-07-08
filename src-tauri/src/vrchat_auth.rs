@@ -5,7 +5,11 @@ use std::time::Duration;
 use tauri::State;
 
 const VRCHAT_API_BASE: &str = "https://api.vrchat.cloud/api/1";
-const USER_AGENT: &str = "WorldRec/0.1.0 (https://github.com/Hiragi0w0/WorldRec)";
+const USER_AGENT: &str = concat!(
+    "WorldRec/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/Hiragi0w0/WorldRec)"
+);
 const REQUEST_TIMEOUT_SECONDS: u64 = 10;
 const KEYRING_SERVICE: &str = "WorldRec";
 const KEYRING_ENTRY: &str = "vrchat_auth_cookie";
@@ -508,6 +512,18 @@ mod tests {
         .expect("valid utf8");
         // URL-encoded email: @ → %40
         assert_eq!(decoded, "user%40example.com:pass");
+    }
+
+    #[test]
+    fn user_agent_uses_package_version() {
+        assert_eq!(
+            USER_AGENT,
+            concat!(
+                "WorldRec/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/Hiragi0w0/WorldRec)"
+            )
+        );
     }
 
     #[test]

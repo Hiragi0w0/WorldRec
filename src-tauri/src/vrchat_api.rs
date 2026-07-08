@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 #[cfg_attr(test, allow(dead_code))]
 const VRCHAT_API_BASE_URL: &str = "https://api.vrchat.cloud/api/1/worlds";
 #[cfg_attr(test, allow(dead_code))]
-const USER_AGENT: &str = "WorldRec/0.1.0 (https://github.com/Hiragi0w0/WorldRec)";
+const USER_AGENT: &str = concat!(
+    "WorldRec/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/Hiragi0w0/WorldRec)"
+);
 #[cfg_attr(test, allow(dead_code))]
 const REQUEST_TIMEOUT_SECONDS: u64 = 8;
 const DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS: u64 = 120;
@@ -462,6 +466,18 @@ mod tests {
         assert!(!is_valid_vrchat_world_id("world_12345"));
         assert!(!is_valid_vrchat_world_id("wrld_1"));
         assert!(!is_valid_vrchat_world_id(""));
+    }
+
+    #[test]
+    fn user_agent_uses_package_version() {
+        assert_eq!(
+            USER_AGENT,
+            concat!(
+                "WorldRec/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/Hiragi0w0/WorldRec)"
+            )
+        );
     }
 
     #[test]
