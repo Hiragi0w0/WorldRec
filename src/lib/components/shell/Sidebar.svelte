@@ -12,9 +12,7 @@
     <div class="flex flex-col">
         <div class="p-6 border-b border-[#EBE8DF] flex items-center justify-between">
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-full bg-[#1e5854] text-white flex items-center justify-center font-bold tracking-tight shadow-md">
-                    <span class="text-sm font-semibold tracking-wider font-travel">WR</span>
-                </div>
+                <img src="/app-icon.png" alt="WorldRec" class="w-10 h-10" />
                 <div class="flex flex-col">
                     <span class="text-base font-bold tracking-wide font-travel">WorldRec</span>
                     <span class="text-xs text-zinc-400 font-medium tracking-widest">TRAVEL MEMORIES</span>
