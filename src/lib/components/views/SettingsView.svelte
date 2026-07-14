@@ -308,6 +308,10 @@
 
         const previous = draft;
         const next = { ...draft, ai_enabled: checked };
+        if (settings && !confirmPathChange(settings, next)) {
+            draft = { ...previous };
+            return;
+        }
         draft = next;
         settingsSaveState = "idle";
         settingsSaveError = null;

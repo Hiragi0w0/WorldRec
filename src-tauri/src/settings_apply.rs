@@ -114,7 +114,7 @@ fn apply_settings_with_store(
     };
     let requested_log_dir = resolve_log_dir(&requested_effective.log_dir)?;
     let requested_db_path = resolve_db_path(&requested_effective.db_path)?;
-    let paths_changed = baseline_paths.is_none_or(|(baseline_log_dir, baseline_db_path)| {
+    let paths_changed = baseline_paths.map_or(true, |(baseline_log_dir, baseline_db_path)| {
         !effective_paths_equal(&baseline_log_dir, &requested_log_dir)
             || !effective_paths_equal(&baseline_db_path, &requested_db_path)
     });

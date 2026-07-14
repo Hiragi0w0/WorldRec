@@ -79,6 +79,7 @@
     let selectedLibraryWorldName = $state("");
     let isLibraryDetailOpen = $state(false);
     let isApplyingSettings = $state(false);
+    let isSwitchingSettingsPaths = $state(false);
 
     let visitRecords = $derived(histories.visitRecords);
     let dateList = $derived(histories.dateList);
@@ -188,22 +189,22 @@
         try {
             eventUnlisteners = [
                 await listenVisitSaved(() => {
-                    if (isApplyingSettings) return;
+                    if (isSwitchingSettingsPaths) return;
                     void histories.handleVisitSaved();
                 }),
                 await listenLogWatchStateChanged((status) => {
-                    if (isApplyingSettings) return;
+                    if (isSwitchingSettingsPaths) return;
                     histories.setWatcherStatus(
                         status.running,
                         status.last_error,
                     );
                 }),
                 await listenLogWatchError((message) => {
-                    if (isApplyingSettings) return;
+                    if (isSwitchingSettingsPaths) return;
                     histories.setWatcherStatus(false, message);
                 }),
                 await listenCurrentVisitChanged(() => {
-                    if (isApplyingSettings) return;
+                    if (isSwitchingSettingsPaths) return;
                     void histories.refreshRuntimeStatus();
                 }),
                 await listenOpenSettings(() => {
@@ -451,7 +452,10 @@
         const pathWasEdited = dbPathWasEdited || logPathWasEdited;
 
         isApplyingSettings = true;
-        histories.invalidateLoads();
+        isSwitchingSettingsPaths = pathWasEdited;
+        if (pathWasEdited) {
+            histories.invalidateLoads();
+        }
         try {
             const result = await saveSettings(next);
             appSettings = result.settings;
@@ -475,6 +479,7 @@
 
             return result;
         } finally {
+            isSwitchingSettingsPaths = false;
             isApplyingSettings = false;
         }
     }

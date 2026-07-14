@@ -115,3 +115,64 @@ PR #9 の未解決 P2 レビュー5件と `Rust & Tauri` CI失敗を、設定切
 - 現在のCI直接原因はWindowsの長いパスと8.3短縮パスの表現差であり、workflow変更は不要と判断する。
 - frontendには独立したunit test runnerがないため、非同期競合は小さな純粋helperへ切り出せる場合のみRust同等の自動回帰テストを追加し、それ以外は `npm run check` / `npm run build` とコードレビューで確認する。
 - 付属のCI検査scriptはWindows CP932で `UnicodeDecodeError` になったため、今回は `gh pr checks` と `gh run view --log` の直接結果を根拠にした。script自体の修正はこのリポジトリの対象外とする。
+
+## PR #9 再レビュー対応計画（reviewed commit `5222b853d3`）
+
+### 目的
+
+最新レビューで未解決のP2 3件を、設定切替の安全性と既存MSRVを維持しながら解消する。通常設定保存中のvisit event取りこぼし、Rust 1.77.2でのcompile失敗、AI自動保存による未確認のDB/log path適用を対象とする。
+
+### 制約
+
+- `src-tauri/Cargo.toml` の `rust-version = "1.77.2"` は変更しない。
+- パス変更中に旧DB由来の非同期結果を破棄し、完了後に履歴・runtime・libraryを再読込する既存方針は維持する。
+- パス変更を伴わない設定保存では、visit/watcher eventを抑止せず、進行中のloadも無効化しない。
+- AI有効化の自動保存は既存の `confirmPathChange` を再利用し、新しいbackend commandや設定保存仕様は追加しない。
+- GitHubへの返信、thread resolve、commit、pushは実装承認後に別途行う。
+
+### 対象ファイル
+
+- `src-tauri/src/settings_apply.rs`: MSRV非互換の `Option::is_none_or` をRust 1.77.2互換の式へ置換。
+- `src/App.svelte`: 全設定保存を示すloading状態と、path切替中だけ必要なevent抑止・load無効化を分離。
+- `src/lib/components/views/SettingsView.svelte`: AI toggleの自動保存前にも未保存path変更の確認を行う。
+
+### 非対象
+
+- `src-tauri/Cargo.toml` のMSRV引き上げとdependency更新。
+- 設定DTO、Rust command、DB schema、watcher lifecycleの変更。
+- 既に解決済みの以前のP2 5件と、今回の3件に関係しないUI変更。
+- CI workflowやGitHub review状態の更新。
+
+### 実装手順
+
+1. `baseline_paths.is_none_or(...)` を `map_or(true, ...)` または等価な `match` に置換し、現在のpaths_changed判定を変えずにRust 1.77.2互換へ戻す。MSRV引き上げは行わない。
+2. `App.svelte` にpath切替専用の状態を設け、runtime event listenerはその状態だけを見て中間eventを抑止する。`isApplyingSettings` はglobal loading表示専用として残す。
+3. `handleSaveSettings` の最初の `histories.invalidateLoads()` をpath編集時だけ実行する。path編集時は従来どおり適用後に履歴・runtime・libraryを一括再読込し、非path保存時はevent listenerを通常動作させてruntime statusだけを更新する。
+4. `handleAiEnabledChange` で `next` を作った直後、draftを更新する前に `settings` と `confirmPathChange(settings, next)` を評価する。キャンセル時はAI値と未保存path draftを変えず、`onSaveSettings`を呼ばない。承認時のみ従来の全設定保存へ進む。
+5. 変更差分を、非path保存中のvisit event、path切替中の旧DB応答、確認キャンセル時のdraft保持、MSRV互換性の観点で再レビューする。
+
+### 検証手順
+
+1. Rust 1.77.2が利用可能なら `cargo +1.77.2 check --manifest-path src-tauri/Cargo.toml` を実行し、宣言MSRVでcompileできることを確認する。
+2. `cargo test --manifest-path src-tauri/Cargo.toml settings_apply::tests -- --nocapture`
+3. `npm run check`
+4. `npm run build`
+5. 手動確認: 非path設定保存中の `visit-saved` が履歴更新へ到達する。
+6. 手動確認: path変更保存では中間eventを表示せず、完了後の一括再読込で新しいDB/runtime状態になる。
+7. 手動確認: 未保存のDB/log pathがある状態でAI toggleを変更すると確認が表示され、キャンセル時は保存されない。path未編集時は確認なしでAI設定だけが保存される。
+8. `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` と `git diff --check`
+
+### 未解決事項・前提
+
+- 最新のremote headとlocal `HEAD` はともに `5222b853d34a18b36bdd551315706aec9a01fb03` で、作業ツリーは計画更新前にcleanだった。
+- GitHubのthread-aware取得では、以前のP2 5件は解決済み、最新レビューの上記3件だけが未解決だった。
+- frontendにはcomponent/unit test runnerがないため、event競合とconfirm分岐は静的検査・build・対象手動確認を受入条件とする。テスト基盤の新設は今回のスコープ外とする。
+- 付属 `fetch_comments.py` はactive accountが認証済みでも、別のinactive accountの無効tokenにより `gh auth status` が非0終了となって取得前に停止した。レビュー状態はGitHub connectorのreview thread結果で再確認した。
+
+### 実装結果
+
+- `Option::is_none_or` をRust 1.77.2で利用可能な `Option::map_or` に置換し、paths_changed判定は維持した。
+- `isApplyingSettings` と `isSwitchingSettingsPaths` を分離し、非path保存ではruntime eventと進行中loadを抑止しないようにした。
+- AI toggleの自動保存前にも `confirmPathChange` を通し、キャンセル時はdraftとcheckbox表示を元へ戻すようにした。
+- `cargo fmt --check`、設定適用test 11件、`npm run check`、`npm run build`、`git diff --check` は成功した。
+- Rust 1.77.2のtoolchainは導入できたが、`cargo +1.77.2 check` は既存lockfileの `rand_core 0.10.1` がedition 2024対応Cargoを要求するため、今回のコードをcompileする前に停止した。dependency/MSRV整合の修正は今回のP2 3件の対象外として未変更。
