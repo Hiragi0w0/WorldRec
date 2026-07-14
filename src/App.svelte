@@ -467,21 +467,37 @@
             }
 
             if (pathWasEdited) {
-                histories.invalidateLoads();
-                await Promise.all([
-                    histories.loadVisits(histories.mainVisitCriteria),
-                    histories.refreshRuntimeStatus({ showLoading: true }),
-                    library.loadLibrary(),
-                ]);
+                await reloadAfterSettingsPathChange();
             } else {
                 await histories.refreshRuntimeStatus();
             }
 
             return result;
+        } catch (error) {
+            if (pathWasEdited) {
+                try {
+                    await reloadAfterSettingsPathChange();
+                } catch (reloadError) {
+                    console.error(
+                        "Failed to reload data after settings path apply error.",
+                        reloadError,
+                    );
+                }
+            }
+            throw error;
         } finally {
             isSwitchingSettingsPaths = false;
             isApplyingSettings = false;
         }
+    }
+
+    async function reloadAfterSettingsPathChange() {
+        histories.invalidateLoads();
+        await Promise.all([
+            histories.loadVisits(histories.mainVisitCriteria),
+            histories.refreshRuntimeStatus({ showLoading: true }),
+            library.loadLibrary(),
+        ]);
     }
 
     async function handleReloadSettings(): Promise<AppSettings> {

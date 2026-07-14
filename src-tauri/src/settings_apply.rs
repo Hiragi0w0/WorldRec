@@ -271,11 +271,7 @@ pub fn resolve_settings_paths(mut settings: AppSettings) -> Result<AppSettings, 
 }
 
 fn normalize_default_paths_for_storage(mut settings: AppSettings) -> Result<AppSettings, String> {
-    let configured_log = resolve_log_dir(&settings.log_dir)?;
-    let default_log = resolve_log_dir("")?;
-    if effective_paths_equal(&configured_log, &default_log) {
-        settings.log_dir.clear();
-    }
+    normalize_log_path_for_storage(&mut settings.log_dir, resolve_log_dir)?;
 
     let configured_db = resolve_db_path(&settings.db_path)?;
     let default_db = resolve_db_path("")?;
@@ -284,6 +280,19 @@ fn normalize_default_paths_for_storage(mut settings: AppSettings) -> Result<AppS
     }
 
     Ok(settings)
+}
+
+fn normalize_log_path_for_storage(
+    configured_log_dir: &mut String,
+    resolve: impl Fn(&str) -> Result<std::path::PathBuf, String>,
+) -> Result<(), String> {
+    let configured_log = resolve(configured_log_dir)?;
+    if let Ok(default_log) = resolve("") {
+        if effective_paths_equal(&configured_log, &default_log) {
+            configured_log_dir.clear();
+        }
+    }
+    Ok(())
 }
 
 pub fn status_with_effective_paths(
@@ -420,6 +429,23 @@ mod tests {
 
         assert!(!result.paths_changed);
         assert!(watcher.events.is_empty());
+    }
+
+    #[test]
+    fn explicit_log_path_is_kept_when_default_log_path_cannot_be_resolved() {
+        let explicit_log = unique_temp_dir("explicit-log-without-default");
+        let mut stored_log = explicit_log.to_string_lossy().to_string();
+
+        normalize_log_path_for_storage(&mut stored_log, |value| {
+            if value.is_empty() {
+                Err("injected default log path resolution failure".to_string())
+            } else {
+                resolve_log_dir(value)
+            }
+        })
+        .expect("explicit absolute log path should remain usable");
+
+        assert_eq!(stored_log, explicit_log.to_string_lossy());
     }
 
     #[test]

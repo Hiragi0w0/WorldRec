@@ -176,3 +176,62 @@ PR #9 の未解決 P2 レビュー5件と `Rust & Tauri` CI失敗を、設定切
 - AI toggleの自動保存前にも `confirmPathChange` を通し、キャンセル時はdraftとcheckbox表示を元へ戻すようにした。
 - `cargo fmt --check`、設定適用test 11件、`npm run check`、`npm run build`、`git diff --check` は成功した。
 - Rust 1.77.2のtoolchainは導入できたが、`cargo +1.77.2 check` は既存lockfileの `rand_core 0.10.1` がedition 2024対応Cargoを要求するため、今回のコードをcompileする前に停止した。dependency/MSRV整合の修正は今回のP2 3件の対象外として未変更。
+
+## PR #9 第3回レビュー対応計画（reviewed commit `66fcfa512a`）
+
+### 目的
+
+最新レビューで未解決のP2 2件を解消する。path保存が例外終了した場合も抑止中に失われたFrontend状態を再同期し、既定VRChat log pathを解決できない環境でも明示absolute `log_dir`を使った設定保存を継続できるようにする。
+
+### 制約
+
+- path変更中のruntime event抑止と、成功後の履歴・runtime・library一括再読込は維持する。
+- 保存失敗後の再同期が失敗しても、利用者へ返す元のsettings保存エラーを別エラーで上書きしない。
+- 明示`log_dir`自体のabsolute path検証は必須のままにし、best-effortにするのは既定pathとの比較だけとする。
+- `LOCALAPPDATA`を使うDB既定path処理、settings DTO、watcher lifecycle、CI workflowは変更しない。
+- GitHubへの返信、thread resolve、commit、pushは実装承認後に別途行う。
+
+### 対象ファイル
+
+- `src/App.svelte`: path適用後の再同期を共通化し、`saveSettings`例外時にもbest-effortで実行。
+- `src-tauri/src/settings_apply.rs`: 既定log path解決をbest-effort比較に変更し、環境非依存の回帰テストを追加。
+
+### 非対象
+
+- 既に解決済みの以前のP2 8件。
+- `resolve_log_dir("")`や`default_vrchat_log_dir()`自体のfallback仕様変更。
+- DB既定pathの正規化、dependency/MSRV整合、Frontend test基盤の新設。
+- 保存画面やエラー表示のデザイン変更。
+
+### 実装手順
+
+1. `App.svelte`の履歴・runtime・library再読込を小さなasync helperへ抽出し、成功したpath適用とpath適用例外の両方から同じ処理を呼ぶ。
+2. `saveSettings`がthrowした場合、`pathWasEdited`ならevent抑止解除前に再同期helperを実行して現在有効なDB/runtime状態へ戻す。再同期側の失敗は記録に留め、元のsettings保存エラーを再throwする。
+3. `normalize_default_paths_for_storage`では明示`log_dir`を先に通常どおり解決する。その後の`resolve_log_dir("")`だけを`if let Ok(default_log)`相当のbest-effort比較にし、既定pathを解決できない場合は明示値を保持して処理を続ける。
+4. 環境変数`USERPROFILE`をtest中に変更せず、resolverを注入できる小さなhelperを使って「明示pathは解決成功、空文字の既定pathだけ解決失敗」を再現するRust testを追加する。
+5. 差分を、保存失敗時の元エラー保持、抑止解除タイミング、明示path検証維持、対象外のDB正規化へ影響していないことの観点で再レビューする。
+
+### 検証手順
+
+1. `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`
+2. `cargo test --manifest-path src-tauri/Cargo.toml settings_apply::tests -- --nocapture`
+3. `npm run check`
+4. `npm run build`
+5. 手動確認: relative log/db pathで保存を失敗させても、loadingが解除され、履歴・runtime・libraryが現在有効な保存先で再同期される。
+6. 手動確認: 明示absolute `log_dir`を指定した状態では、既定log path解決不能を注入しても設定保存を継続できる。
+7. `git diff --check`と対象2ファイルの自己レビュー。
+
+### 未解決事項・前提
+
+- local `HEAD`とremote headはともに `66fcfa512ac9f47b7968b555bf8128f71cd5ea10` で、計画更新前の作業ツリーはcleanだった。
+- GitHubのthread-aware結果では全10件中8件が解決済みで、上記2件だけが未解決・non-outdatedだった。
+- Frontendにはcomponent/unit test runnerがないため、保存例外中のevent到着は`npm run check` / `npm run build`と対象手動確認を受入条件とする。
+- 付属`fetch_comments.py`は別inactive accountの無効tokenにより`gh auth status`で停止する既知状態のため、今回はGitHub connectorのreview thread結果を根拠にした。
+
+### 実装結果
+
+- path保存後の履歴・runtime・library再読込を`reloadAfterSettingsPathChange`へ共通化し、`saveSettings`例外時もevent抑止解除前に再同期するようにした。
+- 例外時の再同期エラーはconsole記録に留め、元のsettings保存エラーを再throwする構造を維持した。
+- 明示`log_dir`は従来どおり必須検証し、既定log path解決に失敗した場合だけ比較を省略して明示値を保持するようにした。
+- resolver注入により既定path解決失敗を環境非依存で再現するRust testを追加した。
+- `cargo fmt --check`、設定適用test 12件、`npm run check`、`npm run build`、`git diff --check`は成功した。
