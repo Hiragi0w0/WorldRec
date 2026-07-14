@@ -4,22 +4,15 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
-use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::db::models::PendingVisit;
 use crate::log_watcher::service::{
-    emit_error, is_vrchat_running, resolve_db_path, resolve_log_dir, spawn_polling_watcher,
-    sync_latest_log_into_database, sync_latest_log_once, validate_log_dir, ExitSyncOutcome,
-    SyncLatestLogOnceResult, LOG_WATCH_STATE_CHANGED_EVENT,
+    emit_error, is_vrchat_running, normalize_effective_path, resolve_db_path, resolve_log_dir,
+    spawn_polling_watcher, sync_latest_log_into_database, sync_latest_log_once, validate_db_path,
+    validate_log_dir, ExitSyncOutcome, SyncLatestLogOnceResult, LOG_WATCH_STATE_CHANGED_EVENT,
 };
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct LogWatcherStatus {
-    pub running: bool,
-    pub log_dir: String,
-    pub last_error: Option<String>,
-}
+use crate::log_watcher::LogWatcherStatus;
 
 #[derive(Debug, Default)]
 pub struct LogWatcherState {
@@ -30,6 +23,7 @@ pub struct LogWatcherState {
 struct LogWatcherInner {
     running: bool,
     log_dir: String,
+    db_path: String,
     last_error: Option<String>,
     current_visit: Arc<Mutex<Option<PendingVisit>>>,
     sync_mutex: Arc<Mutex<()>>,
@@ -73,8 +67,11 @@ impl LogWatcherState {
         app_handle: Option<AppHandle>,
     ) -> Result<LogWatcherStatus, String> {
         let log_dir = resolve_log_dir(configured_log_dir)?;
-        let log_dir_string = log_dir.to_string_lossy().to_string();
         let db_path = resolve_db_path(configured_db_path)?;
+        let log_dir = normalize_effective_path(&log_dir);
+        let db_path = normalize_effective_path(&db_path);
+        let log_dir_string = log_dir.to_string_lossy().to_string();
+        let db_path_string = db_path.to_string_lossy().to_string();
 
         {
             let inner = self
@@ -95,6 +92,26 @@ impl LogWatcherState {
                     .expect("log watcher state mutex should not be poisoned");
                 inner.running = false;
                 inner.log_dir = log_dir_string;
+                inner.db_path = db_path_string;
+                inner.last_error = Some(error.clone());
+                inner.status()
+            };
+
+            emit_status(app_handle.as_ref(), &status);
+            emit_error(app_handle.as_ref(), error.clone());
+
+            return Err(error);
+        }
+
+        if let Err(error) = validate_db_path(&db_path) {
+            let status = {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .expect("log watcher state mutex should not be poisoned");
+                inner.running = false;
+                inner.log_dir = log_dir_string;
+                inner.db_path = db_path_string;
                 inner.last_error = Some(error.clone());
                 inner.status()
             };
@@ -130,7 +147,7 @@ impl LogWatcherState {
             Arc::clone(&current_visit),
             sync_mutex,
             app_handle.clone(),
-        );
+        )?;
 
         let status = {
             let mut inner = self
@@ -139,6 +156,7 @@ impl LogWatcherState {
                 .expect("log watcher state mutex should not be poisoned");
             inner.running = true;
             inner.log_dir = log_dir_string;
+            inner.db_path = db_path_string;
             inner.last_error = None;
             inner.stop_requested = Some(stop_requested);
             inner.worker = Some(worker);
@@ -234,7 +252,7 @@ impl LogWatcherState {
         })
     }
 
-    pub fn stop(&self, app_handle: Option<AppHandle>) -> LogWatcherStatus {
+    pub fn stop(&self, app_handle: Option<AppHandle>) -> Result<LogWatcherStatus, String> {
         let worker = {
             let mut inner = self
                 .inner
@@ -250,9 +268,12 @@ impl LogWatcherState {
             inner.worker.take()
         };
 
-        if let Some(worker) = worker {
-            let _ = worker.join();
-        }
+        let join_error = worker.and_then(|worker| {
+            worker
+                .join()
+                .err()
+                .map(|_| "WorldRec log watcher thread panicked while stopping".to_string())
+        });
 
         {
             let current_visit = {
@@ -267,9 +288,20 @@ impl LogWatcherState {
                 .expect("current visit mutex should not be poisoned") = None;
         }
 
-        let status = self.status();
+        let status = {
+            let mut inner = self
+                .inner
+                .lock()
+                .expect("log watcher state mutex should not be poisoned");
+            inner.last_error = join_error.clone();
+            inner.status()
+        };
         emit_status(app_handle.as_ref(), &status);
-        status
+        if let Some(error) = join_error {
+            Err(error)
+        } else {
+            Ok(status)
+        }
     }
 }
 
@@ -278,6 +310,7 @@ impl LogWatcherInner {
         LogWatcherStatus {
             running: self.running,
             log_dir: self.log_dir.clone(),
+            db_path: self.db_path.clone(),
             last_error: self.last_error.clone(),
         }
     }
@@ -310,6 +343,7 @@ mod tests {
 
         assert!(!status.running);
         assert!(status.log_dir.is_empty());
+        assert!(status.db_path.is_empty());
         assert!(status.last_error.is_none());
     }
 
@@ -329,9 +363,10 @@ mod tests {
 
         assert!(status.running);
         assert_eq!(status.log_dir, dir.to_string_lossy());
+        assert_eq!(status.db_path, dir.join("worldrec.db").to_string_lossy());
         assert!(status.last_error.is_none());
 
-        state.stop(None);
+        state.stop(None).expect("watcher should stop");
         fs::remove_dir_all(dir).expect("temp log dir should be removed");
     }
 
@@ -359,7 +394,7 @@ mod tests {
         assert!(first_status.running);
         assert_eq!(second_status, first_status);
 
-        state.stop(None);
+        state.stop(None).expect("watcher should stop");
         fs::remove_dir_all(dir).expect("temp log dir should be removed");
     }
 
@@ -376,7 +411,7 @@ mod tests {
                 None,
             )
             .expect("start should succeed");
-        let status = state.stop(None);
+        let status = state.stop(None).expect("watcher should stop");
 
         assert!(!status.running);
 

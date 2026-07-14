@@ -20,6 +20,10 @@ const MAIN_VISIT_LIMIT = 100;
 
 export class HistoriesState {
   private readonly mainDateAnchor = new Date();
+  private dataGeneration = 0;
+  private visitRequestSeq = 0;
+  private runtimeRequestSeq = 0;
+  private readonly runtimeLoadingRequests = new Set<number>();
   readonly mainVisitCriteria = createMainVisitCriteria(this.mainDateAnchor);
 
   visitRecords = $state<VisitRecord[]>([]);
@@ -35,12 +39,15 @@ export class HistoriesState {
 
   async loadVisits(criteria?: VisitFilterCriteria) {
     const effectiveCriteria = criteria ?? this.mainVisitCriteria;
+    const generation = this.dataGeneration;
+    const requestSeq = ++this.visitRequestSeq;
 
     this.isLoading = true;
     this.error = null;
     this.currentCriteria = effectiveCriteria;
     try {
       const visits = await listVisits(effectiveCriteria);
+      if (!this.isCurrentVisitRequest(generation, requestSeq)) return;
       const currentVisitId = findCurrentVisitId(visits);
       this.visitRecords = visits.map((visit) =>
         mapVisitHistoryToDisplayRecord(visit, {
@@ -53,33 +60,43 @@ export class HistoriesState {
         this.mainDateAnchor,
       );
     } catch (error) {
+      if (!this.isCurrentVisitRequest(generation, requestSeq)) return;
       this.error = toErrorMessage(error);
       this.visitRecords = [];
       this.dateList = buildDateList(this.mainDateAnchor);
       this.selectedDate = formatLocalDateKey(this.mainDateAnchor);
     } finally {
-      this.isLoading = false;
+      if (this.isCurrentVisitRequest(generation, requestSeq)) {
+        this.isLoading = false;
+      }
     }
   }
 
   async refreshRuntimeStatus(options: { showLoading?: boolean } = {}) {
     const showLoading = options.showLoading ?? false;
+    const generation = this.dataGeneration;
+    const requestSeq = ++this.runtimeRequestSeq;
 
     if (showLoading) {
+      this.runtimeLoadingRequests.add(requestSeq);
       this.runtimeStatusLoading = true;
     }
 
     try {
-      this.runtimeStatus = await getRuntimeStatus();
+      const runtimeStatus = await getRuntimeStatus();
+      if (!this.isCurrentRuntimeRequest(generation, requestSeq)) return;
+      this.runtimeStatus = runtimeStatus;
       this.watcherRunning = this.runtimeStatus.watcher_running;
       if (this.runtimeStatus.watcher_last_error) {
         this.error = this.runtimeStatus.watcher_last_error;
       }
     } catch (error) {
+      if (!this.isCurrentRuntimeRequest(generation, requestSeq)) return;
       this.error = toErrorMessage(error);
     } finally {
       if (showLoading) {
-        this.runtimeStatusLoading = false;
+        this.runtimeLoadingRequests.delete(requestSeq);
+        this.runtimeStatusLoading = this.runtimeLoadingRequests.size > 0;
       }
     }
   }
@@ -138,6 +155,15 @@ export class HistoriesState {
     await this.refreshRuntimeStatus();
   }
 
+  invalidateLoads() {
+    this.dataGeneration += 1;
+    this.visitRequestSeq += 1;
+    this.runtimeRequestSeq += 1;
+    this.runtimeLoadingRequests.clear();
+    this.isLoading = false;
+    this.runtimeStatusLoading = false;
+  }
+
   setSelectedDate(dateKey: string) {
     this.selectedDate = dateKey;
   }
@@ -156,6 +182,19 @@ export class HistoriesState {
       };
     }
     if (lastError) this.error = lastError;
+  }
+
+  private isCurrentVisitRequest(generation: number, requestSeq: number) {
+    return (
+      generation === this.dataGeneration && requestSeq === this.visitRequestSeq
+    );
+  }
+
+  private isCurrentRuntimeRequest(generation: number, requestSeq: number) {
+    return (
+      generation === this.dataGeneration &&
+      requestSeq === this.runtimeRequestSeq
+    );
   }
 }
 

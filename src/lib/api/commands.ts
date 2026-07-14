@@ -43,7 +43,26 @@ export type VisitFilterCriteria = {
 export type LogWatcherStatus = {
   running: boolean;
   log_dir: string;
+  db_path: string;
   last_error: string | null;
+};
+
+export type SettingsApplyOutcome =
+  | "applied"
+  | "rejected"
+  | "rolled_back"
+  | "rollback_failed";
+
+export type SettingsApplyResult = {
+  outcome: SettingsApplyOutcome;
+  settings: AppSettings;
+  paths_changed: boolean;
+  watcher_was_running: boolean;
+  watcher_restarted: boolean;
+  watcher_status: LogWatcherStatus;
+  message: string | null;
+  primary_error: string | null;
+  rollback_error: string | null;
 };
 
 export type CurrentVisitDto = {
@@ -173,8 +192,8 @@ export async function getSettings(): Promise<AppSettings> {
   return await invoke<AppSettings>("get_settings");
 }
 
-export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
-  return await invoke<AppSettings>("save_settings", { settings });
+export async function saveSettings(settings: AppSettings): Promise<SettingsApplyResult> {
+  return await invoke<SettingsApplyResult>("save_settings", { settings });
 }
 
 export async function getAppAutostartStatus(): Promise<AppAutostartStatus> {

@@ -11,8 +11,12 @@ use crate::db::{
     schema::initialize_database,
 };
 use crate::log_watcher::service::{is_vrchat_running, resolve_db_path, resolve_log_dir};
-use crate::log_watcher::state::{LogWatcherState, LogWatcherStatus};
+use crate::log_watcher::{state::LogWatcherState, LogWatcherStatus};
 use crate::settings::AppSettings;
+use crate::settings_apply::{
+    apply_settings, resolve_settings_paths as resolve_effective_settings_paths,
+    status_with_effective_paths, SettingsApplyResultDto,
+};
 
 const DEFAULT_RECENT_VISIT_LIMIT: i64 = 100;
 const MIN_RECENT_VISIT_LIMIT: i64 = 1;
@@ -273,44 +277,26 @@ impl From<LibraryWorldVisitRow> for LibraryWorldVisitDto {
 
 #[tauri::command]
 pub fn get_settings() -> AppSettings {
-    let mut settings = crate::settings::load_settings();
-    resolve_settings_paths(&mut settings);
+    let mut settings = resolve_effective_settings_paths(crate::settings::load_settings())
+        .unwrap_or_else(|_| crate::settings::load_settings());
     apply_ai_secret_status(&mut settings);
 
     settings
 }
 
 #[tauri::command]
-pub fn save_settings(mut settings: AppSettings) -> Result<AppSettings, String> {
-    if let Ok(default_log_dir) = resolve_log_dir("") {
-        if settings.log_dir.trim() == default_log_dir.to_string_lossy() {
-            settings.log_dir.clear();
-        }
-    }
-    if let Ok(default_db_path) = resolve_db_path("") {
-        if settings.db_path.trim() == default_db_path.to_string_lossy() {
-            settings.db_path.clear();
-        }
-    }
-
-    let mut saved = crate::settings::save_settings(settings)?;
-    resolve_settings_paths(&mut saved);
-    apply_ai_secret_status(&mut saved);
-
-    Ok(saved)
+pub fn save_settings(
+    settings: AppSettings,
+    app_handle: AppHandle,
+    state: State<'_, LogWatcherState>,
+) -> Result<SettingsApplyResultDto, String> {
+    let mut result = apply_settings(settings, &state, Some(app_handle))?;
+    apply_ai_secret_status(&mut result.settings);
+    Ok(result)
 }
 
 fn apply_ai_secret_status(settings: &mut AppSettings) {
     settings.has_gemini_api_key = crate::ai::has_gemini_api_key();
-}
-
-fn resolve_settings_paths(settings: &mut AppSettings) {
-    if let Ok(log_dir) = resolve_log_dir(&settings.log_dir) {
-        settings.log_dir = log_dir.to_string_lossy().to_string();
-    }
-    if let Ok(db_path) = resolve_db_path(&settings.db_path) {
-        settings.db_path = db_path.to_string_lossy().to_string();
-    }
 }
 
 #[tauri::command]
@@ -395,10 +381,10 @@ pub fn get_library_world_detail(
 #[tauri::command]
 pub fn get_runtime_status(state: State<'_, LogWatcherState>) -> Result<RuntimeStatusDto, String> {
     let settings = get_settings();
-    let db_path = resolve_db_path(&settings.db_path)?;
-    let log_dir = resolve_log_dir(&settings.log_dir)?;
+    let watcher_status = status_with_effective_paths(state.status(), &settings)?;
+    let db_path = resolve_db_path(&watcher_status.db_path)?;
+    let log_dir = resolve_log_dir(&watcher_status.log_dir)?;
     let connection = open_initialized_database(&db_path)?;
-    let watcher_status = state.status();
     let current_visit = state.current_visit();
     let visit_count = visit_count(&connection)?;
     let latest_visit = latest_visit(&connection)?;
@@ -492,14 +478,14 @@ pub fn stop_log_watcher(
     app_handle: AppHandle,
     state: State<'_, LogWatcherState>,
 ) -> Result<LogWatcherStatus, String> {
-    Ok(state.stop(Some(app_handle)))
+    state.stop(Some(app_handle))
 }
 
 #[tauri::command]
 pub fn get_log_watcher_status(
     state: State<'_, LogWatcherState>,
 ) -> Result<LogWatcherStatus, String> {
-    Ok(state.status())
+    status_with_effective_paths(state.status(), &get_settings())
 }
 
 #[tauri::command]

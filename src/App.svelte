@@ -17,6 +17,7 @@
         saveSettings,
         type AppSettings,
         type LibraryWorld,
+        type SettingsApplyResult,
     } from "./lib/api/commands";
     import {
         listenCurrentVisitChanged,
@@ -77,6 +78,8 @@
     let selectedLibraryWorldId = $state<string | null>(null);
     let selectedLibraryWorldName = $state("");
     let isLibraryDetailOpen = $state(false);
+    let isApplyingSettings = $state(false);
+    let isSwitchingSettingsPaths = $state(false);
 
     let visitRecords = $derived(histories.visitRecords);
     let dateList = $derived(histories.dateList);
@@ -105,11 +108,14 @@
             isLoading ||
             library.isLoading ||
             runtimeStatusLoading ||
-            isSyncing,
+            isSyncing ||
+            isApplyingSettings,
     );
     let globalLoadingLabel = $derived(
         isSyncing
             ? "ログを同期しています..."
+            : isApplyingSettings
+              ? "設定を適用しています..."
             : appBootLoading
               ? "起動処理中..."
               : library.isLoading
@@ -183,18 +189,22 @@
         try {
             eventUnlisteners = [
                 await listenVisitSaved(() => {
+                    if (isSwitchingSettingsPaths) return;
                     void histories.handleVisitSaved();
                 }),
                 await listenLogWatchStateChanged((status) => {
+                    if (isSwitchingSettingsPaths) return;
                     histories.setWatcherStatus(
                         status.running,
                         status.last_error,
                     );
                 }),
                 await listenLogWatchError((message) => {
+                    if (isSwitchingSettingsPaths) return;
                     histories.setWatcherStatus(false, message);
                 }),
                 await listenCurrentVisitChanged(() => {
+                    if (isSwitchingSettingsPaths) return;
                     void histories.refreshRuntimeStatus();
                 }),
                 await listenOpenSettings(() => {
@@ -431,30 +441,63 @@
         }
     }
 
-    async function handleSaveSettings(next: AppSettings): Promise<AppSettings> {
+    async function handleSaveSettings(
+        next: AppSettings,
+    ): Promise<SettingsApplyResult> {
         const previousSettings = appSettings;
-        const saved = await saveSettings(next);
-        appSettings = saved;
-        applyUiSettings(saved);
+        const dbPathWasEdited =
+            previousSettings?.db_path.trim() !== next.db_path.trim();
+        const logPathWasEdited =
+            previousSettings?.log_dir.trim() !== next.log_dir.trim();
+        const pathWasEdited = dbPathWasEdited || logPathWasEdited;
 
-        const shouldRefreshAfterSave =
-            !previousSettings ||
-            (previousSettings.db_path === saved.db_path &&
-                previousSettings.log_dir === saved.log_dir);
-
-        if (shouldRefreshAfterSave) {
-            try {
-                await histories.loadVisits(histories.mainVisitCriteria);
-                await histories.refreshRuntimeStatus();
-            } catch (error) {
-                console.error(
-                    "Failed to refresh histories after settings save.",
-                    error,
-                );
-            }
+        isApplyingSettings = true;
+        isSwitchingSettingsPaths = pathWasEdited;
+        if (pathWasEdited) {
+            histories.invalidateLoads();
         }
+        try {
+            const result = await saveSettings(next);
+            appSettings = result.settings;
+            applyUiSettings(result.settings);
 
-        return saved;
+            if (dbPathWasEdited) {
+                closeWorldDetail();
+                closeLibraryWorldDetail();
+            }
+
+            if (pathWasEdited) {
+                await reloadAfterSettingsPathChange();
+            } else {
+                await histories.refreshRuntimeStatus();
+            }
+
+            return result;
+        } catch (error) {
+            if (pathWasEdited) {
+                try {
+                    await reloadAfterSettingsPathChange();
+                } catch (reloadError) {
+                    console.error(
+                        "Failed to reload data after settings path apply error.",
+                        reloadError,
+                    );
+                }
+            }
+            throw error;
+        } finally {
+            isSwitchingSettingsPaths = false;
+            isApplyingSettings = false;
+        }
+    }
+
+    async function reloadAfterSettingsPathChange() {
+        histories.invalidateLoads();
+        await Promise.all([
+            histories.loadVisits(histories.mainVisitCriteria),
+            histories.refreshRuntimeStatus({ showLoading: true }),
+            library.loadLibrary(),
+        ]);
     }
 
     async function handleReloadSettings(): Promise<AppSettings> {
@@ -469,13 +512,13 @@
         if (!appSettings) return;
 
         try {
-            const saved = await saveSettings({
+            const result = await saveSettings({
                 ...appSettings,
                 onboarding_completed: true,
             });
 
-            appSettings = saved;
-            applyUiSettings(saved);
+            appSettings = result.settings;
+            applyUiSettings(result.settings);
             showOnboarding = false;
         } catch (error) {
             histories.error = toErrorMessage(error);

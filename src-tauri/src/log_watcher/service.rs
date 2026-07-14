@@ -749,7 +749,7 @@ pub fn resolve_log_dir(settings_log_dir: &str) -> Result<PathBuf, String> {
         return default_vrchat_log_dir();
     }
 
-    Ok(PathBuf::from(configured_log_dir))
+    resolve_absolute_path(PathBuf::from(configured_log_dir), "VRChat log directory")
 }
 
 pub fn validate_log_dir(log_dir: &Path) -> Result<(), String> {
@@ -767,6 +767,14 @@ pub fn validate_log_dir(log_dir: &Path) -> Result<(), String> {
         ));
     }
 
+    fs::read_dir(log_dir).map_err(|error| {
+        format!(
+            "VRChat log directory cannot be read {}: {}",
+            log_dir.display(),
+            error
+        )
+    })?;
+
     Ok(())
 }
 
@@ -774,7 +782,7 @@ pub fn resolve_db_path(settings_db_path: &str) -> Result<PathBuf, String> {
     let configured_db_path = settings_db_path.trim();
 
     if !configured_db_path.is_empty() {
-        return Ok(PathBuf::from(configured_db_path));
+        return resolve_absolute_path(PathBuf::from(configured_db_path), "WorldRec database");
     }
 
     let db_path = default_worldrec_db_path()?;
@@ -796,6 +804,121 @@ pub fn resolve_db_path(settings_db_path: &str) -> Result<PathBuf, String> {
     Ok(db_path)
 }
 
+fn resolve_absolute_path(path: PathBuf, label: &str) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "{label} path must be absolute and cannot be resolved safely: {}",
+            path.display()
+        ));
+    }
+
+    Ok(path)
+}
+
+pub fn normalize_effective_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return display_safe_canonical_path(canonical);
+    }
+
+    if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
+        if let Ok(canonical_parent) = parent.canonicalize() {
+            return display_safe_canonical_path(canonical_parent).join(file_name);
+        }
+    }
+
+    path.to_path_buf()
+}
+
+#[cfg(target_os = "windows")]
+fn display_safe_canonical_path(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    if let Some(regular) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(regular);
+    }
+    path
+}
+
+#[cfg(not(target_os = "windows"))]
+fn display_safe_canonical_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+pub fn effective_paths_equal(left: &Path, right: &Path) -> bool {
+    let left = normalize_effective_path(left);
+    let right = normalize_effective_path(right);
+
+    #[cfg(target_os = "windows")]
+    {
+        normalize_windows_path_string(&left) == normalize_windows_path_string(&right)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        left == right
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_path_string(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .to_lowercase()
+}
+
+pub fn validate_db_path(db_path: &Path) -> Result<(), String> {
+    if db_path.is_dir() {
+        return Err(format!(
+            "WorldRec database path is a directory: {}",
+            db_path.display()
+        ));
+    }
+
+    let connection = open_initialized_database(db_path)?;
+    validate_database_connection(&connection, db_path)
+}
+
+fn validate_database_connection(connection: &Connection, db_path: &Path) -> Result<(), String> {
+    let quick_check: String = connection
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|error| {
+            format!(
+                "WorldRec database quick_check failed {}: {}",
+                db_path.display(),
+                error
+            )
+        })?;
+
+    if !quick_check.eq_ignore_ascii_case("ok") {
+        return Err(format!(
+            "WorldRec database quick_check did not return ok {}: {}",
+            db_path.display(),
+            quick_check
+        ));
+    }
+
+    connection
+        .execute_batch(
+            "BEGIN IMMEDIATE;
+             UPDATE visit_histories
+             SET updated_at = updated_at
+             WHERE rowid IN (SELECT rowid FROM visit_histories LIMIT 1);
+             ROLLBACK;",
+        )
+        .map_err(|error| {
+            format!(
+                "WorldRec database is not writable {}: {}",
+                db_path.display(),
+                error
+            )
+        })?;
+
+    Ok(())
+}
+
 fn default_worldrec_db_path() -> Result<PathBuf, String> {
     let local_app_data = env::var_os("LOCALAPPDATA").ok_or_else(|| {
         "LOCALAPPDATA is not set; WorldRec database path cannot be resolved".to_string()
@@ -815,17 +938,20 @@ pub fn spawn_polling_watcher(
     current_visit: Arc<Mutex<Option<PendingVisit>>>,
     sync_mutex: Arc<Mutex<()>>,
     app_handle: Option<AppHandle>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        run_polling_watcher(
-            log_dir,
-            db_path,
-            stop_requested,
-            current_visit,
-            sync_mutex,
-            app_handle,
-        )
-    })
+) -> Result<JoinHandle<()>, String> {
+    thread::Builder::new()
+        .name("worldrec-log-watcher".to_string())
+        .spawn(move || {
+            run_polling_watcher(
+                log_dir,
+                db_path,
+                stop_requested,
+                current_visit,
+                sync_mutex,
+                app_handle,
+            )
+        })
+        .map_err(|error| format!("WorldRec log watcher thread cannot be started: {error}"))
 }
 
 pub fn sync_latest_log_once(
@@ -2693,6 +2819,64 @@ mod tests {
         assert!(current_visit.lock().unwrap().is_none());
 
         drop(visit_recorder);
+        fs::remove_dir_all(dir).expect("temp dir should be removed");
+    }
+
+    #[test]
+    fn effective_path_comparison_ignores_trailing_separator() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let with_separator =
+            PathBuf::from(format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR));
+
+        assert!(effective_paths_equal(&dir, &with_separator));
+
+        fs::remove_dir_all(dir).expect("temp dir should be removed");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn effective_path_comparison_is_case_insensitive_on_windows() {
+        let left = PathBuf::from(r"C:\Users\WorldRec\worldrec.db");
+        let right = PathBuf::from(r"c:\users\worldrec\WORLDREC.DB");
+
+        assert!(effective_paths_equal(&left, &right));
+    }
+
+    #[test]
+    fn relative_configured_paths_are_rejected() {
+        assert!(resolve_log_dir("relative\\logs").is_err());
+        assert!(resolve_db_path("relative\\worldrec.db").is_err());
+    }
+
+    #[test]
+    fn database_path_with_file_parent_is_rejected_as_unwritable() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let file_parent = dir.join("not-a-directory");
+        fs::write(&file_parent, "blocker").expect("blocking file should be written");
+
+        let result = validate_db_path(&file_parent.join("worldrec.db"));
+
+        assert!(result.is_err());
+        fs::remove_dir_all(dir).expect("temp dir should be removed");
+    }
+
+    #[test]
+    fn query_only_main_database_is_rejected_as_unwritable() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let db_path = dir.join("worldrec.db");
+        let connection =
+            open_initialized_database(&db_path).expect("test database should be initialized");
+        connection
+            .pragma_update(None, "query_only", true)
+            .expect("connection should become query-only");
+
+        let result = validate_database_connection(&connection, &db_path);
+
+        assert!(result.is_err());
+        drop(connection);
         fs::remove_dir_all(dir).expect("temp dir should be removed");
     }
 }
