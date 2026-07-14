@@ -5,6 +5,7 @@
         AiStatus,
         AppSettings,
         RuntimeStatusDto,
+        SettingsApplyResult,
         VrchatAuthStatus,
         VrchatAuthResult,
     } from "../../api/commands";
@@ -34,7 +35,9 @@
     export let onPaperStyleChange: (style: PaperStyle) => void;
     export let onReloadRuntimeStatus: () => void;
     export let onStartWatcher: () => void;
-    export let onSaveSettings: (settings: AppSettings) => Promise<AppSettings>;
+    export let onSaveSettings: (
+        settings: AppSettings,
+    ) => Promise<SettingsApplyResult>;
     export let onReloadSettings: () => Promise<AppSettings>;
     export let onDeleteAllHistory: () => Promise<number | null>;
 
@@ -43,6 +46,8 @@
     let isReloadingSettings = false;
     let settingsSaveState: "idle" | "success" | "error" = "idle";
     let settingsSaveError: string | null = null;
+    let settingsSaveMessage: string | null = null;
+    let settingsSaveDetails: string | null = null;
     let isDeletingAllHistory = false;
     let deleteAllHistoryResult: number | null = null;
     let deleteAllHistoryError: string | null = null;
@@ -246,18 +251,49 @@
         if (!draft) return;
         draft = { ...draft, ...patch };
         settingsSaveState = "idle";
+        settingsSaveMessage = null;
+        settingsSaveDetails = null;
+    }
+
+    function pathWasEdited(current: AppSettings, next: AppSettings) {
+        return (
+            current.log_dir.trim() !== next.log_dir.trim() ||
+            current.db_path.trim() !== next.db_path.trim()
+        );
+    }
+
+    function confirmPathChange(current: AppSettings, next: AppSettings) {
+        if (!pathWasEdited(current, next)) return true;
+
+        const dbChanged = current.db_path.trim() !== next.db_path.trim();
+        const message = dbChanged
+            ? "DB保存先またはVRChatログフォルダを変更します。\n\n既存DBの履歴は自動コピーされません。新しいDBが空の場合、履歴は0件に見えます。元のDBパスへ戻せば元の履歴を再表示できます。DBファイルは自動削除されません。\n\n続行しますか？"
+            : "VRChatログフォルダを変更します。ログ監視を安全に停止し、新しいフォルダで再開します。続行しますか？";
+
+        return confirm(message);
+    }
+
+    function applySaveResult(result: SettingsApplyResult) {
+        draft = { ...result.settings };
+        settingsSaveMessage = result.message;
+        settingsSaveDetails = [result.primary_error, result.rollback_error]
+            .filter((value): value is string => Boolean(value))
+            .join("\n") || null;
+        settingsSaveState = result.outcome === "applied" ? "success" : "error";
     }
 
     async function handleSaveSettings() {
         if (!draft) return;
+        if (settings && !confirmPathChange(settings, draft)) return;
 
         isSavingSettings = true;
         settingsSaveState = "idle";
         settingsSaveError = null;
+        settingsSaveMessage = null;
+        settingsSaveDetails = null;
         try {
-            const saved = await onSaveSettings(draft);
-            draft = { ...saved };
-            settingsSaveState = "success";
+            const result = await onSaveSettings(draft);
+            applySaveResult(result);
         } catch (error) {
             settingsSaveState = "error";
             settingsSaveError =
@@ -275,12 +311,13 @@
         draft = next;
         settingsSaveState = "idle";
         settingsSaveError = null;
+        settingsSaveMessage = null;
+        settingsSaveDetails = null;
         isSavingSettings = true;
 
         try {
-            const saved = await onSaveSettings(next);
-            draft = { ...saved };
-            settingsSaveState = "success";
+            const result = await onSaveSettings(next);
+            applySaveResult(result);
         } catch (error) {
             draft = previous;
             settingsSaveState = "error";
@@ -295,6 +332,8 @@
         isReloadingSettings = true;
         settingsSaveState = "idle";
         settingsSaveError = null;
+        settingsSaveMessage = null;
+        settingsSaveDetails = null;
         try {
             const fresh = await onReloadSettings();
             draft = { ...fresh };
@@ -390,7 +429,7 @@
         <div class="flex gap-2">
             <button
                 onclick={handleReloadSettings}
-                disabled={isReloadingSettings}
+                disabled={isReloadingSettings || isSavingSettings}
                 class="bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-700 border border-zinc-300 py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-sm"
             >
                 <RefreshCcw class="w-4 h-4 text-zinc-400" />
@@ -630,11 +669,12 @@
                     <input
                         type="text"
                         value={draft.log_dir}
+                        disabled={isSavingSettings}
                         oninput={(event) =>
                             updateDraft({
                                 log_dir: (event.currentTarget as HTMLInputElement).value,
                             })}
-                        class="w-full bg-white border border-zinc-200 rounded-xl p-3 text-sm focus:outline-none focus:border-[#1e5854] mt-1.5 text-zinc-700 font-bold"
+                        class="w-full bg-white border border-zinc-200 rounded-xl p-3 text-sm focus:outline-none focus:border-[#1e5854] mt-1.5 text-zinc-700 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                     />
                 </label>
 
@@ -645,11 +685,12 @@
                     <input
                         type="text"
                         value={draft.db_path}
+                        disabled={isSavingSettings}
                         oninput={(event) =>
                             updateDraft({
                                 db_path: (event.currentTarget as HTMLInputElement).value,
                             })}
-                        class="w-full bg-white border border-zinc-200 rounded-xl p-3 text-sm focus:outline-none focus:border-[#1e5854] mt-1.5 text-zinc-700 font-bold"
+                        class="w-full bg-white border border-zinc-200 rounded-xl p-3 text-sm focus:outline-none focus:border-[#1e5854] mt-1.5 text-zinc-700 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                     />
                 </label>
 
@@ -959,14 +1000,22 @@
             <p
                 class="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2"
             >
-                設定を保存しました。
+                {settingsSaveMessage ?? "設定を保存しました。"}
             </p>
         {:else if settingsSaveState === "error"}
-            <p
-                class="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2"
-            >
-                {settingsSaveError}
-            </p>
+            <div class="space-y-2">
+                <p
+                    class="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2"
+                >
+                    {settingsSaveMessage ?? settingsSaveError}
+                </p>
+                {#if settingsSaveDetails}
+                    <details class="text-xs text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 whitespace-pre-wrap">
+                        <summary class="font-bold cursor-pointer">詳細エラー</summary>
+                        <div class="mt-2">{settingsSaveDetails}</div>
+                    </details>
+                {/if}
+            </div>
         {/if}
     {/if}
 </section>

@@ -14,6 +14,7 @@ mod commands;
 mod tray;
 
 mod settings;
+mod settings_apply;
 mod vrchat_api;
 mod vrchat_auth;
 
