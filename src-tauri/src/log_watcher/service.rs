@@ -878,6 +878,10 @@ pub fn validate_db_path(db_path: &Path) -> Result<(), String> {
     }
 
     let connection = open_initialized_database(db_path)?;
+    validate_database_connection(&connection, db_path)
+}
+
+fn validate_database_connection(connection: &Connection, db_path: &Path) -> Result<(), String> {
     let quick_check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(|error| {
@@ -899,8 +903,9 @@ pub fn validate_db_path(db_path: &Path) -> Result<(), String> {
     connection
         .execute_batch(
             "BEGIN IMMEDIATE;
-             CREATE TEMP TABLE worldrec_path_write_check (value INTEGER NOT NULL);
-             INSERT INTO worldrec_path_write_check (value) VALUES (1);
+             UPDATE visit_histories
+             SET updated_at = updated_at
+             WHERE rowid IN (SELECT rowid FROM visit_histories LIMIT 1);
              ROLLBACK;",
         )
         .map_err(|error| {
@@ -2821,7 +2826,8 @@ mod tests {
     fn effective_path_comparison_ignores_trailing_separator() {
         let dir = unique_temp_dir();
         fs::create_dir_all(&dir).expect("temp dir should be created");
-        let with_separator = PathBuf::from(format!("{}\\", dir.display()));
+        let with_separator =
+            PathBuf::from(format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR));
 
         assert!(effective_paths_equal(&dir, &with_separator));
 
@@ -2853,6 +2859,24 @@ mod tests {
         let result = validate_db_path(&file_parent.join("worldrec.db"));
 
         assert!(result.is_err());
+        fs::remove_dir_all(dir).expect("temp dir should be removed");
+    }
+
+    #[test]
+    fn query_only_main_database_is_rejected_as_unwritable() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let db_path = dir.join("worldrec.db");
+        let connection =
+            open_initialized_database(&db_path).expect("test database should be initialized");
+        connection
+            .pragma_update(None, "query_only", true)
+            .expect("connection should become query-only");
+
+        let result = validate_database_connection(&connection, &db_path);
+
+        assert!(result.is_err());
+        drop(connection);
         fs::remove_dir_all(dir).expect("temp dir should be removed");
     }
 }

@@ -81,26 +81,43 @@ fn apply_settings_with_store(
     watcher: &mut impl WatcherControl,
     mut save: impl FnMut(AppSettings) -> Result<AppSettings, String>,
 ) -> Result<SettingsApplyResultDto, String> {
-    let previous_effective = resolve_settings_paths(previous.clone())?;
     let requested_storage = normalize_default_paths_for_storage(requested)?;
     let requested_effective = resolve_settings_paths(requested_storage.clone())?;
-    let previous_status = status_with_effective_paths(watcher.status(), &previous_effective)?;
+    let current_status = watcher.status();
+    let previous_effective = resolve_settings_paths(previous.clone()).ok();
+    let previous_status = if current_status.running {
+        current_status
+    } else if let Some(previous_effective) = previous_effective.as_ref() {
+        status_with_effective_paths(current_status, previous_effective)?
+    } else {
+        LogWatcherStatus {
+            running: false,
+            log_dir: previous.log_dir.clone(),
+            db_path: previous.db_path.clone(),
+            last_error: current_status.last_error,
+        }
+    };
     let watcher_was_running = previous_status.running;
 
-    let baseline_log_dir = if watcher_was_running {
-        resolve_log_dir(&previous_status.log_dir)?
+    let baseline_paths = if watcher_was_running {
+        Some((
+            resolve_log_dir(&previous_status.log_dir)?,
+            resolve_db_path(&previous_status.db_path)?,
+        ))
+    } else if let Some(settings) = previous_effective.as_ref() {
+        Some((
+            resolve_log_dir(&settings.log_dir)?,
+            resolve_db_path(&settings.db_path)?,
+        ))
     } else {
-        resolve_log_dir(&previous_effective.log_dir)?
-    };
-    let baseline_db_path = if watcher_was_running {
-        resolve_db_path(&previous_status.db_path)?
-    } else {
-        resolve_db_path(&previous_effective.db_path)?
+        None
     };
     let requested_log_dir = resolve_log_dir(&requested_effective.log_dir)?;
     let requested_db_path = resolve_db_path(&requested_effective.db_path)?;
-    let paths_changed = !effective_paths_equal(&baseline_log_dir, &requested_log_dir)
-        || !effective_paths_equal(&baseline_db_path, &requested_db_path);
+    let paths_changed = baseline_paths.is_none_or(|(baseline_log_dir, baseline_db_path)| {
+        !effective_paths_equal(&baseline_log_dir, &requested_log_dir)
+            || !effective_paths_equal(&baseline_db_path, &requested_db_path)
+    });
 
     if !paths_changed {
         let saved = save(requested_storage)?;
@@ -121,13 +138,14 @@ fn apply_settings_with_store(
     if let Err(error) =
         validate_log_dir(&requested_log_dir).and_then(|_| validate_db_path(&requested_db_path))
     {
+        let settings = previous_effective.unwrap_or_else(|| previous.clone());
         return Ok(SettingsApplyResultDto {
             outcome: SettingsApplyOutcome::Rejected,
-            settings: previous_effective.clone(),
+            settings,
             paths_changed: true,
             watcher_was_running,
             watcher_restarted: false,
-            watcher_status: status_with_effective_paths(watcher.status(), &previous_effective)?,
+            watcher_status: previous_status,
             message: Some(
                 "新しい保存先を確認できなかったため、設定は変更していません。以前の監視を継続しています。"
                     .to_string(),
@@ -194,11 +212,20 @@ fn rollback_after_failure(
         }
     }
 
-    let restored_settings = match save(previous) {
-        Ok(settings) => resolve_settings_paths(settings)?,
+    let restored_settings = match save(previous.clone()) {
+        Ok(settings) => resolve_settings_paths(settings).unwrap_or(previous),
         Err(error) => {
+            let mut rollback_error = format!("previous settings cannot be restored: {error}");
+            if previous_status.running {
+                if let Err(error) =
+                    watcher.start(&previous_status.log_dir, &previous_status.db_path)
+                {
+                    rollback_error
+                        .push_str(&format!("; previous watcher cannot be restarted: {error}"));
+                }
+            }
             return Err(format!(
-                "settings apply failed ({primary_error}); previous settings cannot be restored: {error}"
+                "settings apply failed ({primary_error}); {rollback_error}"
             ));
         }
     };
@@ -396,6 +423,42 @@ mod tests {
     }
 
     #[test]
+    fn valid_requested_paths_replace_invalid_saved_paths() {
+        let root = unique_temp_dir("repair-invalid-paths");
+        let log_dir = root.join("logs");
+        let db_path = root.join("worldrec.db");
+        fs::create_dir_all(&log_dir).expect("log directory should be created");
+        let previous = AppSettings {
+            log_dir: "relative\\logs".to_string(),
+            db_path: "relative\\worldrec.db".to_string(),
+            ..AppSettings::default()
+        };
+        let mut watcher = FakeWatcher::new(&previous, false);
+
+        let result = apply_settings_with_store(
+            previous,
+            settings_for(&log_dir, &db_path),
+            &mut watcher,
+            save_in_memory,
+        )
+        .expect("valid replacement paths should apply");
+
+        assert_eq!(result.outcome, SettingsApplyOutcome::Applied);
+        assert!(result.paths_changed);
+        assert!(effective_paths_equal(
+            PathBuf::from(result.settings.log_dir).as_path(),
+            &log_dir
+        ));
+        assert!(effective_paths_equal(
+            PathBuf::from(result.settings.db_path).as_path(),
+            &db_path
+        ));
+        assert!(!result.watcher_status.running);
+
+        fs::remove_dir_all(root).expect("temporary directory should be removed");
+    }
+
+    #[test]
     fn running_status_keeps_actual_paths_instead_of_newer_settings_paths() {
         let root = unique_temp_dir("actual-status");
         let actual = settings_for(&root.join("actual-logs"), &root.join("actual.db"));
@@ -582,6 +645,50 @@ mod tests {
         assert_eq!(result.settings.db_path, old_db.to_string_lossy());
         assert!(!result.watcher_status.running);
         assert!(result.rollback_error.is_some());
+
+        fs::remove_dir_all(root).expect("temporary directory should be removed");
+    }
+
+    #[test]
+    fn rollback_save_failure_still_restarts_previous_watcher() {
+        let root = unique_temp_dir("rollback-save-failed");
+        let old_log = root.join("old-logs");
+        let new_log = root.join("new-logs");
+        let old_db = root.join("old.db");
+        let new_db = root.join("new.db");
+        fs::create_dir_all(&old_log).expect("old log directory should be created");
+        fs::create_dir_all(&new_log).expect("new log directory should be created");
+        let previous = settings_for(&old_log, &old_db);
+        let mut watcher = FakeWatcher::new(&previous, true);
+        watcher.queue_start_failure("injected new watcher start failure");
+        let mut save_count = 0;
+
+        let result = apply_settings_with_store(
+            previous,
+            settings_for(&new_log, &new_db),
+            &mut watcher,
+            |settings| {
+                save_count += 1;
+                if save_count == 2 {
+                    Err("injected rollback save failure".to_string())
+                } else {
+                    Ok(settings)
+                }
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(watcher.status.running);
+        assert!(effective_paths_equal(
+            PathBuf::from(&watcher.status.log_dir).as_path(),
+            &old_log
+        ));
+        assert!(effective_paths_equal(
+            PathBuf::from(&watcher.status.db_path).as_path(),
+            &old_db
+        ));
+        assert_eq!(watcher.events.len(), 3);
+        assert_eq!(watcher.events.first().map(String::as_str), Some("stop"));
 
         fs::remove_dir_all(root).expect("temporary directory should be removed");
     }

@@ -23,6 +23,7 @@ export class HistoriesState {
   private dataGeneration = 0;
   private visitRequestSeq = 0;
   private runtimeRequestSeq = 0;
+  private readonly runtimeLoadingRequests = new Set<number>();
   readonly mainVisitCriteria = createMainVisitCriteria(this.mainDateAnchor);
 
   visitRecords = $state<VisitRecord[]>([]);
@@ -77,6 +78,7 @@ export class HistoriesState {
     const requestSeq = ++this.runtimeRequestSeq;
 
     if (showLoading) {
+      this.runtimeLoadingRequests.add(requestSeq);
       this.runtimeStatusLoading = true;
     }
 
@@ -92,11 +94,9 @@ export class HistoriesState {
       if (!this.isCurrentRuntimeRequest(generation, requestSeq)) return;
       this.error = toErrorMessage(error);
     } finally {
-      if (
-        showLoading &&
-        this.isCurrentRuntimeRequest(generation, requestSeq)
-      ) {
-        this.runtimeStatusLoading = false;
+      if (showLoading) {
+        this.runtimeLoadingRequests.delete(requestSeq);
+        this.runtimeStatusLoading = this.runtimeLoadingRequests.size > 0;
       }
     }
   }
@@ -159,6 +159,7 @@ export class HistoriesState {
     this.dataGeneration += 1;
     this.visitRequestSeq += 1;
     this.runtimeRequestSeq += 1;
+    this.runtimeLoadingRequests.clear();
     this.isLoading = false;
     this.runtimeStatusLoading = false;
   }
